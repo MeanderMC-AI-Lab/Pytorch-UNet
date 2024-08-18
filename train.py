@@ -26,6 +26,42 @@ dir_img_val = Path('/data/TWO_23_019/CholecSeg8k/CholecSeg8k_blood/images/val')
 dir_mask_val = Path('/data/TWO_23_019/CholecSeg8k/CholecSeg8k_blood/labels/val')
 dir_checkpoint = Path('./checkpoints/')
 
+# Define the transformations
+class JointTransform:
+    def __init__(self):
+        self.hflip = transforms.RandomHorizontalFlip(p=0.5)
+        self.vflip = transforms.RandomVerticalFlip(p=0.5)
+        self.color_jitter = transforms.ColorJitter(
+            brightness=0.5,
+            contrast=0.5,
+            saturation=0.5,
+            hue=0.1
+        )
+
+    def __call__(self, image, mask):
+        # Apply random horizontal flip
+        if torch.rand(1) < 0.5:
+            image = transforms.functional.hflip(image)
+            mask = transforms.functional.hflip(mask)
+
+        # Apply random vertical flip
+        if torch.rand(1) < 0.5:
+            image = transforms.functional.vflip(image)
+            mask = transforms.functional.vflip(mask)
+
+        # Apply color jitter only to the image
+        image = self.color_jitter(image)
+        
+        return image, mask
+
+def apply_joint_transform_to_batch(batch_images, batch_masks, transform):
+    transformed_images = []
+    transformed_masks = []
+    for img, mask in zip(batch_images, batch_masks):
+        img, mask = transform(img, mask)
+        transformed_images.append(img)
+        transformed_masks.append(mask)
+    return torch.stack(transformed_images), torch.stack(transformed_masks)
 
 def train_model(
         model,
@@ -80,15 +116,16 @@ def train_model(
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
     criterion = nn.CrossEntropyLoss() if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
-
+    
     # 5. Begin training
     for epoch in range(1, epochs + 1):
         model.train()
         epoch_loss = 0
         with tqdm(total=n_train, desc=f'Epoch {epoch}/{epochs}', unit='img') as pbar:
             for batch in train_loader:
-                images, true_masks = batch['image'], batch['mask']
-
+                images, true_masks = batch['image'], batch['mask']                
+                images, true_masks = apply_joint_transform_to_batch(images, true_masks, JointTransform())
+                
                 assert images.shape[1] == model.n_channels, \
                     f'Network has been defined with {model.n_channels} input channels, ' \
                     f'but loaded images have {images.shape[1]} channels. Please check that ' \
@@ -142,7 +179,7 @@ def train_model(
                         val_score = evaluate(model, val_loader, device, amp)
                         scheduler.step(val_score)
 
-                        # logging.info('Validation Dice score: {}'.format(val_score))
+                        logging.info('Validation Dice score: {}'.format(val_score))
                         try:
                             experiment.log({
                                 'learning rate': optimizer.param_groups[0]['lr'],
@@ -170,9 +207,9 @@ def train_model(
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
-    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=5, help='Number of epochs')
-    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=10, help='Batch size')
-    parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
+    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=1, help='Number of epochs')
+    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=11, help='Batch size')
+    parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-6,
                         help='Learning rate', dest='lr')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
     parser.add_argument('--scale', '-s', type=float, default=1, help='Downscaling factor of the images')
@@ -195,19 +232,19 @@ if __name__ == '__main__':
     # Change here to adapt to your data
     # n_channels=3 for RGB images
     # n_classes is the number of probabilities you want to get per pixel
+    
     model = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
     model = model.to(memory_format=torch.channels_last)
-
+    
     logging.info(f'Network:\n'
                  f'\t{model.n_channels} input channels\n'
                  f'\t{model.n_classes} output channels (classes)\n'
                  f'\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling')
 
     if args.load:
-        print("Hello World")
-        # net = torch.hub.load('milesial/Pytorch-UNet', 'unet_carvana', pretrained=True, scale=0.5)
         state_dict = torch.load(args.load, map_location=device)
-        del state_dict['mask_values']
+        # del state_dict['mask_values']
+        state_dict.pop('mask_values', None) 
         model.load_state_dict(state_dict)
         logging.info(f'Model loaded from {args.load}')
 
