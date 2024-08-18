@@ -1,0 +1,19 @@
+command:
+  - ${env}
+  - python3
+  - ${program}
+  - ${args}
+project:  "U-Net Blood detection"
+program: train.py
+method: bayes
+metric:
+  goal: maximize
+  name: val_score
+name: Standard sweep
+parameters:
+  learning-rate:
+    distribution: uniform
+    min: 0.0000001
+    max: 0.001
+  load:
+    values: ["/tmp/unet_carvana_scale1.0_epoch2.pth", "False"]
