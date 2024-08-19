@@ -16,4 +16,4 @@ parameters:
     min: 0.0000001
     max: 0.001
   load:
-    values: ["/tmp/unet_carvana_scale1.0_epoch2.pth", "False"]
+    values: ["/tmp/unet_carvana_scale1.0_epoch2.pth", ""]

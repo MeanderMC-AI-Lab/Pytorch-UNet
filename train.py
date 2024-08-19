@@ -1,11 +1,13 @@
 import argparse
 import logging
+import numpy as np 
 import os
 import random
 import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
 from pathlib import Path
@@ -28,13 +30,15 @@ dir_checkpoint = Path('./checkpoints/')
 
 # Define the transformations
 class JointTransform:
-    def __init__(self):
+    def __init__(self, seed=5):
+        torch.manual_seed(seed)
+        
         self.hflip = transforms.RandomHorizontalFlip(p=0.5)
         self.vflip = transforms.RandomVerticalFlip(p=0.5)
         self.color_jitter = transforms.ColorJitter(
-            brightness=0.5,
-            contrast=0.5,
-            saturation=0.5,
+            brightness=0.1,
+            contrast=0.1,
+            saturation=0.1,
             hue=0.1
         )
 
@@ -76,6 +80,7 @@ def train_model(
         weight_decay: float = 1e-8,
         momentum: float = 0.999,
         gradient_clipping: float = 1.0,
+        seed: int = 5,
 ):
     # 1. Create dataset
     dataset_train = BasicDataset(dir_img_train, dir_mask_train, img_scale)
@@ -86,6 +91,7 @@ def train_model(
     
     # 3. Create data loaders
     # loader_args = dict(batch_size=batch_size, num_workers=os.cpu_count(), pin_memory=True)
+    torch.manual_seed(seed)
     loader_args = dict(batch_size=batch_size, num_workers=16, pin_memory=True)
     train_loader = DataLoader(dataset_train, shuffle=True, **loader_args)
     val_loader = DataLoader(dataset_val, shuffle=False, drop_last=True, **loader_args)
@@ -116,6 +122,7 @@ def train_model(
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
     criterion = nn.CrossEntropyLoss() if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
+    best_loss = np.inf
     
     # 5. Begin training
     for epoch in range(1, epochs + 1):
@@ -124,7 +131,7 @@ def train_model(
         with tqdm(total=n_train, desc=f'Epoch {epoch}/{epochs}', unit='img') as pbar:
             for batch in train_loader:
                 images, true_masks = batch['image'], batch['mask']                
-                images, true_masks = apply_joint_transform_to_batch(images, true_masks, JointTransform())
+                images, true_masks = apply_joint_transform_to_batch(images, true_masks, JointTransform(seed))
                 
                 assert images.shape[1] == model.n_channels, \
                     f'Network has been defined with {model.n_channels} input channels, ' \
@@ -163,19 +170,18 @@ def train_model(
                     'epoch': epoch
                 })
                 pbar.set_postfix(**{'loss (batch)': loss.item()})
-
+                
                 # Evaluation round
                 division_step = (n_train // (5 * batch_size))
                 if division_step > 0:
                     if global_step % division_step == 0:
-                        histograms = {}
-                        for tag, value in model.named_parameters():
-                            tag = tag.replace('/', '.')
-                            if not (torch.isinf(value) | torch.isnan(value)).any():
-                                histograms['Weights/' + tag] = wandb.Histogram(value.data.cpu())
-                            if not (torch.isinf(value.grad) | torch.isnan(value.grad)).any():
-                                histograms['Gradients/' + tag] = wandb.Histogram(value.grad.data.cpu())
-
+                        # histograms = {}
+                        # for tag, value in model.named_parameters():
+                        #     tag = tag.replace('/', '.')
+                        #     if not (torch.isinf(value) | torch.isnan(value)).any():
+                        #         histograms['Weights/' + tag] = wandb.Histogram(value.data.cpu())
+                        #     if not (torch.isinf(value.grad) | torch.isnan(value.grad)).any():
+                        #         histograms['Gradients/' + tag] = wandb.Histogram(value.grad.data.cpu())
                         val_score = evaluate(model, val_loader, device, amp)
                         scheduler.step(val_score)
 
@@ -184,19 +190,35 @@ def train_model(
                             experiment.log({
                                 'learning rate': optimizer.param_groups[0]['lr'],
                                 'validation Dice': val_score,
-                                'images': wandb.Image(images[0].cpu()),
-                                'masks': {
-                                    'true': wandb.Image(true_masks[0].float().cpu()),
-                                    'pred': wandb.Image(masks_pred.argmax(dim=1)[0].float().cpu()),
-                                },
                                 'step': global_step,
                                 'epoch': epoch,
-                                **histograms
+                                # **histograms
                             })
+                            if epoch == 1:
+                                img_grid = torchvision.utils.make_grid(images, nrow=4)
+                                # Check the shape and dtype
+                                img_grid = img_grid.permute(1, 2, 0).cpu().numpy()  # Convert from CxHxW to HxWxC
+                                img_grid = (img_grid * 255).astype(np.uint8)
+                                # Log images to wandb
+                                experiment.log({"epoch": epoch, "batch": [wandb.Image(img_grid, caption=f"Batch of 11 images")]})
+                            if epoch == epochs: # if final epoch
+                                experiment.log({    
+                                    'images': wandb.Image(images[0].cpu()),
+                                    'masks': {
+                                        'true': wandb.Image(true_masks[0].float().cpu()),
+                                        'pred': wandb.Image(masks_pred.argmax(dim=1)[0].float().cpu()),
+                                }})
                         except:
-                            pass
+                            print(f"An error occurred while logging to WandB: {e}")
+                            # pass
 
-        # If you want to save it 
+        # # to save best model from run 
+        # if val_score < best_loss:
+        #     best_loss = val_losses
+        #     best_model_path = os.path.join('/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/tmp_data/tmp_UNET_model',wandb.run.name+'best_trainedUNet.pt')
+        #     torch.save(model.state_dict(), best_model_path)
+            
+        # If you want to save it (original from milesial)
         # if save_checkpoint:
         #     Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
         #     state_dict = model.state_dict()
@@ -207,7 +229,7 @@ def train_model(
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
-    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=1, help='Number of epochs')
+    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=5, help='Number of epochs')
     parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=11, help='Batch size')
     parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-6,
                         help='Learning rate', dest='lr')
@@ -218,6 +240,7 @@ def get_args():
     parser.add_argument('--amp', action='store_true', default=True, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
+    parser.add_argument('--seed', type=int, default=5, help='Number of classes')
 
     return parser.parse_args()
 
@@ -258,7 +281,8 @@ if __name__ == '__main__':
             device=device,
             img_scale=args.scale,
             val_percent=args.val / 100,
-            amp=args.amp
+            amp=args.amp,
+            seed = args.seed
         )
     except torch.cuda.OutOfMemoryError:
         logging.error('Detected OutOfMemoryError! '
@@ -274,5 +298,6 @@ if __name__ == '__main__':
             device=device,
             img_scale=args.scale,
             val_percent=args.val / 100,
-            amp=args.amp
+            amp=args.amp,
+            seed = args.seed
         )
