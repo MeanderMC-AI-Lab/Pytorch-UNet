@@ -2,7 +2,7 @@ import argparse
 import logging
 import numpy as np 
 import os
-import random
+# import random
 import sys
 import torch
 import torch.nn as nn
@@ -82,6 +82,12 @@ def train_model(
         gradient_clipping: float = 1.0,
         seed: int = 5,
 ):
+    # 0. Set seeds for reproducibility
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    np.random.seed(seed)
+    # random.seed(seed)
+    
     # 1. Create dataset
     dataset_train = BasicDataset(dir_img_train, dir_mask_train, img_scale)
     dataset_val = BasicDataset(dir_img_val, dir_mask_val, img_scale)
@@ -91,7 +97,6 @@ def train_model(
     
     # 3. Create data loaders
     # loader_args = dict(batch_size=batch_size, num_workers=os.cpu_count(), pin_memory=True)
-    torch.manual_seed(seed)
     loader_args = dict(batch_size=batch_size, num_workers=16, pin_memory=True)
     train_loader = DataLoader(dataset_train, shuffle=True, **loader_args)
     val_loader = DataLoader(dataset_val, shuffle=False, drop_last=True, **loader_args)
@@ -122,7 +127,7 @@ def train_model(
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
     criterion = nn.CrossEntropyLoss() if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
-    best_loss = np.inf
+    best_dice = 0
     
     # 5. Begin training
     for epoch in range(1, epochs + 1):
@@ -212,11 +217,11 @@ def train_model(
                             print(f"An error occurred while logging to WandB: {e}")
                             # pass
 
-        # # to save best model from run 
-        # if val_score < best_loss:
-        #     best_loss = val_losses
-        #     best_model_path = os.path.join('/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/tmp_data/tmp_UNET_model',wandb.run.name+'best_trainedUNet.pt')
-        #     torch.save(model.state_dict(), best_model_path)
+        # to save best model from run 
+        if val_score > best_dice: # if current Dice score is higher than previous highest dice score, save mdoel
+            best_dice = val_score
+            best_model_path = os.path.join('/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/tmp_data/tmp_UNET_model',wandb.run.name+'best_trainedUNet.pt')
+            torch.save(model.state_dict(), best_model_path)
             
         # If you want to save it (original from milesial)
         # if save_checkpoint:
