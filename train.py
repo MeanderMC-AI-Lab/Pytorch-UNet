@@ -23,19 +23,19 @@ from utils.dice_score import dice_loss
 
 # Define the transformations
 class JointTransform:
-    def __init__(self, seed=5):
-        torch.manual_seed(seed)
+    def __init__(self, args):
+        torch.manual_seed(args.seed)
         
         self.hflip = transforms.RandomHorizontalFlip(p=0.5)
         self.vflip = transforms.RandomVerticalFlip(p=0.5)
         self.color_jitter = transforms.ColorJitter(
-            brightness=0.1,
-            contrast=0.1,
-            saturation=0.1,
-            hue=0.1
+            brightness=args.brightness, #0.05,
+            contrast=args.contrast, #0.05,
+            saturation=args.saturation, #0.05,
+            hue=args.hue #0.05
         )
 
-    def __call__(self, image, mask):
+    def __call__(self, args, image, mask):
         # Apply random horizontal flip
         if torch.rand(1) < 0.5:
             image = transforms.functional.hflip(image)
@@ -47,20 +47,22 @@ class JointTransform:
             mask = transforms.functional.vflip(mask)
 
         # Apply color jitter only to the image
-        image = self.color_jitter(image)
+        if args.colorjitter == True:
+            image = self.color_jitter(image)
         
         return image, mask
 
-def apply_joint_transform_to_batch(batch_images, batch_masks, transform):
+def apply_joint_transform_to_batch(batch_images, batch_masks, transform, args):
     transformed_images = []
     transformed_masks = []
     for img, mask in zip(batch_images, batch_masks):
-        img, mask = transform(img, mask)
+        img, mask = transform(args, img, mask)
         transformed_images.append(img)
         transformed_masks.append(mask)
     return torch.stack(transformed_images), torch.stack(transformed_masks)
 
 def train_model(
+        args,
         model,
         device,
         epochs: int = 5,
@@ -93,7 +95,7 @@ def train_model(
     experiment = wandb.init(project='U-Net Blood detection', resume='allow', anonymous='must')
     experiment.config.update(
         dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate,
-             val_percent=val_percent, save_checkpoint=save_checkpoint, img_scale=img_scale, amp=amp)
+             val_percent=val_percent, save_maskcheckpoint=save_checkpoint, img_scale=img_scale, amp=amp)
     )
 
     logging.info(f'''Starting training:
@@ -124,7 +126,7 @@ def train_model(
         with tqdm(total=n_train, desc=f'Epoch {epoch}/{epochs}', unit='img') as pbar:
             for batch in train_loader:
                 images, true_masks = batch['image'], batch['mask']                
-                images, true_masks = apply_joint_transform_to_batch(images, true_masks, JointTransform(seed))
+                images, true_masks = apply_joint_transform_to_batch(images, true_masks, JointTransform(args), args)
                 
                 assert images.shape[1] == model.n_channels, \
                     f'Network has been defined with {model.n_channels} input channels, ' \
@@ -165,8 +167,11 @@ def train_model(
                 pbar.set_postfix(**{'loss (batch)': loss.item()})
                 
                 # Evaluation round
-                division_step = (n_train // (5 * batch_size))
-                if division_step > 0:
+                if n_train > (10*batch_size):
+                    division_step = (n_train // (5 * batch_size)) # for normal sized dataset
+                else:
+                    division_step = (n_train // (n_train)) # for very small sized dataset (where batch is almost completely the size of the training set
+                if division_step > 0:                        
                     if global_step % division_step == 0:
                         # histograms = {}
                         # for tag, value in model.named_parameters():
@@ -196,7 +201,7 @@ def train_model(
                                 experiment.log({"epoch": epoch, "batch": [wandb.Image(img_grid, caption=f"Batch of 11 images")]})
                             if epoch == epochs: # if final epoch
                                 experiment.log({    
-                                    'images': wandb.Image(images[0].cpu()),
+                                    'imagesmask': wandb.Image(images[0].cpu()),
                                     'masks': {
                                         'true': wandb.Image(true_masks[0].float().cpu()),
                                         'pred': wandb.Image(masks_pred.argmax(dim=1)[0].float().cpu()),
@@ -209,7 +214,7 @@ def train_model(
                         if save_model == 1:
                             if val_score > best_dice: # if current Dice score is higher than previous highest dice score, save mdoel
                                 best_dice = val_score
-                                best_model_path = os.path.join('/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/tmp_data/tmp_UNET_model',wandb.run.name+'best_trainedUNet.pt')
+                                best_model_path = os.path.join(args.save_model_path,wandb.run.name+'best_trainedUNet.pt')
                                 torch.save(model.state_dict(), best_model_path)
             
         # If you want to save it (original from milesial)
@@ -224,7 +229,7 @@ def train_model(
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
     parser.add_argument('--amp', action='store_true', default=True, help='Use mixed precision')
-    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=11, help='Batch size')
+    parser.add_argument('--batch_size', '-b', dest='batch_size', metavar='B', type=int, default=11, help='Batch size')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
     parser.add_argument('--epochs', '-e', metavar='E', type=int, default=5, help='Number of epochs')
@@ -233,13 +238,24 @@ def get_args():
                         help='Learning rate', dest='lr')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
     parser.add_argument('--save_model', type=int, default=1, help='If set to 1, save model')
+    parser.add_argument('--save_model_path', type=str, default='/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/tmp_data/tmp_UNET_model', help='If set to 1, save model')
     parser.add_argument('--scale', '-s', type=float, default=1, help='Downscaling factor of the images')
     parser.add_argument('--seed', type=int, default=120, help='Seed of model')
     parser.add_argument('--validation', '-v', dest='val', type=float, default=10.0,
                         help='Percent of the data that is used as validation (0-100)')
 
+    # Set data augmentation parameters
+    parser.add_argument('--colorjitter', action='store_true', default=True, help='Number of classes')
+    parser.add_argument('--brightness', type=float, default=0.05, help='Number of classes')
+    parser.add_argument('--contrast', type=float, default=0.05, help='Number of classes')
+    parser.add_argument('--saturation', type=float, default=0.05, help='Number of classes')
+    parser.add_argument('--hue', type=float, default=0.05, help='Number of classes')
+    
     return parser.parse_args()
 
+
+# example run:
+#      python3 train.py --batch-size 7 --epochs 1 --data_path '/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/UNET_fundo_only_dataset'  
 
 if __name__ == '__main__':
     args = get_args()
@@ -288,6 +304,7 @@ if __name__ == '__main__':
     model.to(device=device)
     try:
         train_model(
+            args,
             model=model,
             epochs=args.epochs,
             batch_size=args.batch_size,
@@ -306,6 +323,7 @@ if __name__ == '__main__':
         torch.cuda.empty_cache()
         model.use_checkpointing()
         train_model(
+            args,
             model=model,
             epochs=args.epochs,
             batch_size=args.batch_size,
@@ -314,5 +332,5 @@ if __name__ == '__main__':
             img_scale=args.scale,
             val_percent=args.val / 100,
             amp=args.amp,
-            seed = args.seed
+            seed = args.seed,
         )
