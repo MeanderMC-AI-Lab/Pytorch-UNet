@@ -9,11 +9,16 @@ method: bayes
 metric:
   goal: maximize
   name: val_score
-name: Standard sweep
+name: Seed sweep
 parameters:
   learning-rate:
-    distribution: uniform
-    min: 0.0000001
-    max: 0.00001
+    value: 0.00000181698743558112
+  seed:
+    distribution: int_uniform
+    min: 1
+    max: 500
+    # distribution: uniform
+    # min: 0.0000001
+    # max: 0.00001
   load:
-    values: ["/tmp/unet_carvana_scale1.0_epoch2.pth", ""]
+    value: ""

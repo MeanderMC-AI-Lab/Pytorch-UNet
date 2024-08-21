@@ -21,13 +21,6 @@ from unet import UNet
 from utils.data_loading import BasicDataset
 from utils.dice_score import dice_loss
 
-dir_img_train = Path('/data/TWO_23_019/CholecSeg8k/CholecSeg8k_blood/images/train')
-dir_mask_train = Path('/data/TWO_23_019/CholecSeg8k/CholecSeg8k_blood/labels/train')
-
-dir_img_val = Path('/data/TWO_23_019/CholecSeg8k/CholecSeg8k_blood/images/val')
-dir_mask_val = Path('/data/TWO_23_019/CholecSeg8k/CholecSeg8k_blood/labels/val')
-dir_checkpoint = Path('./checkpoints/')
-
 # Define the transformations
 class JointTransform:
     def __init__(self, seed=5):
@@ -81,12 +74,8 @@ def train_model(
         momentum: float = 0.999,
         gradient_clipping: float = 1.0,
         seed: int = 5,
+        save_model: int = 0
 ):
-    # 0. Set seeds for reproducibility
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    np.random.seed(seed)
-    # random.seed(seed)
     
     # 1. Create dataset
     dataset_train = BasicDataset(dir_img_train, dir_mask_train, img_scale)
@@ -96,7 +85,6 @@ def train_model(
     n_train = int(len(dataset_train))
     
     # 3. Create data loaders
-    # loader_args = dict(batch_size=batch_size, num_workers=os.cpu_count(), pin_memory=True)
     loader_args = dict(batch_size=batch_size, num_workers=16, pin_memory=True)
     train_loader = DataLoader(dataset_train, shuffle=True, **loader_args)
     val_loader = DataLoader(dataset_val, shuffle=False, drop_last=True, **loader_args)
@@ -217,11 +205,12 @@ def train_model(
                             print(f"An error occurred while logging to WandB: {e}")
                             # pass
 
-        # to save best model from run 
-        if val_score > best_dice: # if current Dice score is higher than previous highest dice score, save mdoel
-            best_dice = val_score
-            best_model_path = os.path.join('/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/tmp_data/tmp_UNET_model',wandb.run.name+'best_trainedUNet.pt')
-            torch.save(model.state_dict(), best_model_path)
+                        # to save best model from run 
+                        if save_model == 1:
+                            if val_score > best_dice: # if current Dice score is higher than previous highest dice score, save mdoel
+                                best_dice = val_score
+                                best_model_path = os.path.join('/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/tmp_data/tmp_UNET_model',wandb.run.name+'best_trainedUNet.pt')
+                                torch.save(model.state_dict(), best_model_path)
             
         # If you want to save it (original from milesial)
         # if save_checkpoint:
@@ -234,18 +223,20 @@ def train_model(
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
-    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=5, help='Number of epochs')
+    parser.add_argument('--amp', action='store_true', default=True, help='Use mixed precision')
     parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=11, help='Batch size')
+    parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
+    parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
+    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=5, help='Number of epochs')
+    parser.add_argument('--data_path', type=str, default = '/data/TWO_23_019/CholecSeg8k/CholecSeg8k_blood', help='global path to the dataset') 
     parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-6,
                         help='Learning rate', dest='lr')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
+    parser.add_argument('--save_model', type=int, default=1, help='If set to 1, save model')
     parser.add_argument('--scale', '-s', type=float, default=1, help='Downscaling factor of the images')
+    parser.add_argument('--seed', type=int, default=120, help='Seed of model')
     parser.add_argument('--validation', '-v', dest='val', type=float, default=10.0,
                         help='Percent of the data that is used as validation (0-100)')
-    parser.add_argument('--amp', action='store_true', default=True, help='Use mixed precision')
-    parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
-    parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
-    parser.add_argument('--seed', type=int, default=5, help='Number of classes')
 
     return parser.parse_args()
 
@@ -253,6 +244,24 @@ def get_args():
 if __name__ == '__main__':
     args = get_args()
 
+    # 0. Set seeds for reproducibility
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    # random.seed(seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    # set data paths
+    dir_img_train = Path(os.path.join(args.data_path,'images/train'))
+    dir_mask_train = Path(os.path.join(args.data_path,'labels/train'))
+    
+    dir_img_val = Path(os.path.join(args.data_path,'images/val'))
+    dir_mask_val = Path(os.path.join(args.data_path,'labels/val'))
+    dir_checkpoint = Path('./checkpoints/')
+
+    
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Using device {device}')
@@ -287,7 +296,8 @@ if __name__ == '__main__':
             img_scale=args.scale,
             val_percent=args.val / 100,
             amp=args.amp,
-            seed = args.seed
+            seed = args.seed,
+            save_model = args.save_model
         )
     except torch.cuda.OutOfMemoryError:
         logging.error('Detected OutOfMemoryError! '
