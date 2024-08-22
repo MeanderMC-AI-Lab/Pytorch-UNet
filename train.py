@@ -2,7 +2,6 @@ import argparse
 import logging
 import numpy as np 
 import os
-# import random
 import sys
 import torch
 import torch.nn as nn
@@ -216,15 +215,6 @@ def train_model(
                                 best_dice = val_score
                                 best_model_path = os.path.join(args.save_model_path,wandb.run.name+'best_trainedUNet.pt')
                                 torch.save(model.state_dict(), best_model_path)
-            
-        # If you want to save it (original from milesial)
-        # if save_checkpoint:
-        #     Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
-        #     state_dict = model.state_dict()
-        #     state_dict['mask_values'] = dataset_train.mask_values
-        #     torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
-        #     logging.info(f'Checkpoint {epoch} saved!')
-
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
@@ -264,7 +254,6 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
     np.random.seed(args.seed)
-    # random.seed(seed)
 
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False

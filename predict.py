@@ -1,4 +1,5 @@
 import argparse
+import glob
 import logging
 import os
 
@@ -32,31 +33,11 @@ def predict_img(net,
 
     return mask[0].long().squeeze().numpy()
 
+# def get_output_filenames(args):
+#     def _generate_name(fn):
+#         return f'{os.path.splitext(fn)[0]}_OUT.png'
 
-def get_args():
-    parser = argparse.ArgumentParser(description='Predict masks from input images')
-    parser.add_argument('--model', '-m', default='MODEL.pth', metavar='FILE',
-                        help='Specify the file in which the model is stored')
-    parser.add_argument('--input', '-i', metavar='INPUT', nargs='+', help='Filenames of input images', required=True)
-    parser.add_argument('--output', '-o', metavar='OUTPUT', nargs='+', help='Filenames of output images')
-    parser.add_argument('--viz', '-v', action='store_true',
-                        help='Visualize the images as they are processed')
-    parser.add_argument('--no-save', '-n', action='store_true', help='Do not save the output masks')
-    parser.add_argument('--mask-threshold', '-t', type=float, default=0.5,
-                        help='Minimum probability value to consider a mask pixel white')
-    parser.add_argument('--scale', '-s', type=float, default=0.5,
-                        help='Scale factor for the input images')
-    parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
-    parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
-    
-    return parser.parse_args()
-
-
-def get_output_filenames(args):
-    def _generate_name(fn):
-        return f'{os.path.splitext(fn)[0]}_OUT.png'
-
-    return args.output or list(map(_generate_name, args.input))
+#     return args.output or list(map(_generate_name, args.input))
 
 
 def mask_to_image(mask: np.ndarray, mask_values):
@@ -75,14 +56,33 @@ def mask_to_image(mask: np.ndarray, mask_values):
 
     return Image.fromarray(out)
 
+def get_args():
+    parser = argparse.ArgumentParser(description='Predict masks from input images')
+    parser.add_argument('--model', '-m', default='/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/tmp_data/tmp_UNET_model/w27g3dz2best_trainedUNet.pt', metavar='FILE',
+                        help='Specify the file in which the model is stored')
+    parser.add_argument('--input', '-i', metavar='INPUT', nargs='+', help='Filenames of input images or directory', required=True)
+    parser.add_argument('--output_dir', '-o', metavar='OUTPUT', default = '/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/tmp_data/tmp_UNET_predictions' , help='Filenames of output images')
+    parser.add_argument('--viz', '-v', action='store_true',
+                        help='Visualize the images as they are processed')
+    parser.add_argument('--no-save', '-n', action='store_true', help='Do not save the output masks')
+    parser.add_argument('--mask-threshold', '-t', type=float, default=0.5,
+                        help='Minimum probability value to consider a mask pixel white')
+    parser.add_argument('--scale', '-s', type=float, default=1,
+                        help='Scale factor for the input images')
+    parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
+    parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
+    
+    return parser.parse_args()
 
 if __name__ == '__main__':
     args = get_args()
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
     in_files = args.input
-    out_files = get_output_filenames(args)
-
+    if os.path.isdir(in_files[0]): # if it is a directory, find all images in the directory 
+        in_files = sorted(glob.glob(in_files[0] +'/*.png'))
+    
+    # # out_files = get_output_filenames(args)   
     net = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -97,7 +97,7 @@ if __name__ == '__main__':
     logging.info('Model loaded!')
 
     for i, filename in enumerate(in_files):
-        logging.info(f'Predicting image {filename} ...')
+        # logging.info(f'Predicting image {filename} ...')        
         img = Image.open(filename)
 
         mask = predict_img(net=net,
@@ -107,10 +107,11 @@ if __name__ == '__main__':
                            device=device)
 
         if not args.no_save:
-            out_filename = out_files[i]
+            # out_filename = out_files[i]
+            out_filename = os.path.join(args.output_dir,filename.split('/')[-1])
             result = mask_to_image(mask, mask_values)
             result.save(out_filename)
-            logging.info(f'Mask saved to {out_filename}')
+            # logging.info(f'Mask saved to {out_filename}')
 
         if args.viz:
             logging.info(f'Visualizing results for image {filename}, close to continue...')
