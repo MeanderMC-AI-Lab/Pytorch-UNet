@@ -56,6 +56,23 @@ def mask_to_image(mask: np.ndarray, mask_values):
 
     return Image.fromarray(out)
 
+def stats(image_prediction, image_GT):
+    TP = np.sum((image_prediction == True) & (image_GT == 1))  # True Positives
+    FP = np.sum((image_prediction == True) & (image_GT == 0))  # False Positives
+    FN = np.sum((image_prediction == False) & (image_GT == 1))  # False Positives
+    TN = np.sum((image_prediction == False) & (image_GT == 0))  # True Positives
+    # # Accuracy 
+    # Accuracy = (TP + TN) / (TP + TN + FP + FN)  * 100    
+    # # Precision
+    # Precision = 100*TP / (TP + FP) if (TP + FP) > 0 else 0 
+    #     # Recall 
+    # Recall = TP / (TP + FN) * 100
+    # Dice
+    Dice = 2*TP / (2*TP + FP + FN) 
+    # Area
+    # Area = 100*np.sum(image_prediction == 1) / np.sum(image_GT == 1)
+    return Dice  #Accuracy, Precision, Recall, Dice , Area
+
 def get_args():
     parser = argparse.ArgumentParser(description='Predict masks from input images')
     parser.add_argument('--model', '-m', default='/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/tmp_data/tmp_UNET_model/w27g3dz2best_trainedUNet.pt', metavar='FILE',
@@ -71,6 +88,7 @@ def get_args():
                         help='Scale factor for the input images')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
+    parser.add_argument('--dir_mask_GT', type=str, default='/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/UNET_fundo_only_dataset/labels/test', help='Path to dir of GT masks, only required when trying to eval Dice for blood detection')
     
     return parser.parse_args()
 
@@ -96,8 +114,9 @@ if __name__ == '__main__':
 
     logging.info('Model loaded!')
 
-    for i, filename in enumerate(in_files):
-        # logging.info(f'Predicting image {filename} ...')        
+    Dice_list = [] 
+    filenames_GT_masks = sorted(glob.glob(args.dir_mask_GT +'/*.png'))
+    for i, filename in enumerate(in_files):       
         img = Image.open(filename)
 
         mask = predict_img(net=net,
@@ -107,12 +126,18 @@ if __name__ == '__main__':
                            device=device)
 
         if not args.no_save:
-            # out_filename = out_files[i]
             out_filename = os.path.join(args.output_dir,filename.split('/')[-1])
             result = mask_to_image(mask, mask_values)
             result.save(out_filename)
-            # logging.info(f'Mask saved to {out_filename}')
 
+        # Eval prediction
+        image_prediction = np.array(Image.open(out_filename))
+        image_GT = np.array(Image.open(filenames_GT_masks[i]))
+        Dice = stats(image_prediction, image_GT)
+        Dice_list.append(Dice)
+        
         if args.viz:
             logging.info(f'Visualizing results for image {filename}, close to continue...')
             plot_img_and_mask(img, mask)
+    
+    print(f'Dice score is: {np.mean(Dice_list)}.')
