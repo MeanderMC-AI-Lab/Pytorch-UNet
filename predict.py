@@ -61,17 +61,17 @@ def stats(image_prediction, image_GT):
     FP = np.sum((image_prediction == True) & (image_GT == 0))  # False Positives
     FN = np.sum((image_prediction == False) & (image_GT == 1))  # False Positives
     TN = np.sum((image_prediction == False) & (image_GT == 0))  # True Positives
-    # # Accuracy 
-    # Accuracy = (TP + TN) / (TP + TN + FP + FN)  * 100    
-    # # Precision
-    # Precision = 100*TP / (TP + FP) if (TP + FP) > 0 else 0 
-    #     # Recall 
-    # Recall = TP / (TP + FN) * 100
+    # Accuracy 
+    Accuracy = (TP + TN) / (TP + TN + FP + FN)  * 100    
+    # Precision
+    Precision = 100*TP / (TP + FP) if (TP + FP) > 0 else 0 
+        # Recall 
+    Recall = TP / (TP + FN) * 100
     # Dice
     Dice = 2*TP / (2*TP + FP + FN) 
     # Area
-    # Area = 100*np.sum(image_prediction == 1) / np.sum(image_GT == 1)
-    return Dice  #Accuracy, Precision, Recall, Dice , Area
+    Area = 100*np.sum(image_prediction == 1) / np.sum(image_GT == 1)
+    return Accuracy, Precision, Recall, Dice , Area
 
 def get_args():
     parser = argparse.ArgumentParser(description='Predict masks from input images')
@@ -105,16 +105,20 @@ if __name__ == '__main__':
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Loading model {args.model}')
-    logging.info(f'Using device {device}')
+    # logging.info(f'Using device {device}')
 
     net.to(device=device)
     state_dict = torch.load(args.model, map_location=device)
     mask_values = state_dict.pop('mask_values', [0, 1])
     net.load_state_dict(state_dict)
 
-    logging.info('Model loaded!')
+    # logging.info('Model loaded!')
 
-    Dice_list = [] 
+    Accuracy_list = []
+    Precision_list = []
+    Recall_list = []
+    Dice_list = []
+    Area_list = []
     filenames_GT_masks = sorted(glob.glob(args.dir_mask_GT +'/*.png'))
     for i, filename in enumerate(in_files):       
         img = Image.open(filename)
@@ -130,14 +134,22 @@ if __name__ == '__main__':
             result = mask_to_image(mask, mask_values)
             result.save(out_filename)
 
-        # Eval prediction
+        # Evaluate the predictions
         image_prediction = np.array(Image.open(out_filename))
         image_GT = np.array(Image.open(filenames_GT_masks[i]))
-        Dice = stats(image_prediction, image_GT)
+        Accuracy, Precision, Recall, Dice , Area = stats(image_prediction, image_GT)
+        Accuracy_list.append(Accuracy)
+        Precision_list.append(Precision)
+        Recall_list.append(Recall) 
         Dice_list.append(Dice)
+        Area_list.append(Area)
         
         if args.viz:
             logging.info(f'Visualizing results for image {filename}, close to continue...')
             plot_img_and_mask(img, mask)
     
-    print(f'Dice score is: {np.mean(Dice_list)}.')
+    print("Accuracy: {:.2f}% with range: {:.2f}% to {:.2f}%".format(np.median(Accuracy_list), np.min(Accuracy_list), np.max(Accuracy_list)))
+    print("Precision: {:.2f}% with range: {:.2f}% to {:.2f}%".format(np.median(Precision_list), np.min(Precision_list), np.max(Precision_list)))
+    print("Sensitivity: {:.2f}% with range: {:.2f}% to {:.2f}%".format(np.median(Recall_list), np.min(Recall_list), np.max(Recall_list)))
+    print("Dice score: {:.3f} with range: {:.3f} to {:.3f}".format(np.median(Dice_list), np.min(Dice_list), np.max(Dice_list)))
+    print("Area is: {:.2f}% with range: {:.2f}% to {:.2f}%".format(np.median(Area_list), np.min(Area_list), np.max(Area_list)))
