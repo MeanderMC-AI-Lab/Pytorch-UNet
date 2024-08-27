@@ -2,6 +2,7 @@ import argparse
 import glob
 import logging
 import os
+import time 
 
 import numpy as np
 import torch
@@ -55,6 +56,15 @@ def mask_to_image(mask: np.ndarray, mask_values):
         out[mask == i] = v
 
     return Image.fromarray(out)
+
+class Timer:    
+    def __enter__(self):
+        self.tick = time.time()
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        self.tock = time.time()
+        self.elapsed = self.tock - self.tick
 
 def stats(image_prediction, image_GT):
     TP = np.sum((image_prediction == True) & (image_GT == 1))  # True Positives
@@ -120,33 +130,36 @@ if __name__ == '__main__':
     Dice_list = []
     Area_list = []
     filenames_GT_masks = sorted(glob.glob(args.dir_mask_GT +'/*.png'))
-    for i, filename in enumerate(in_files):       
-        img = Image.open(filename)
+    with Timer() as unet_predict_time:
+        for i, filename in enumerate(in_files):       
+            img = Image.open(filename)
+    
+            mask = predict_img(net=net,
+                               full_img=img,
+                               scale_factor=args.scale,
+                               out_threshold=args.mask_threshold,
+                               device=device)
 
-        mask = predict_img(net=net,
-                           full_img=img,
-                           scale_factor=args.scale,
-                           out_threshold=args.mask_threshold,
-                           device=device)
-
-        if not args.no_save:
-            out_filename = os.path.join(args.output_dir,filename.split('/')[-1])
-            result = mask_to_image(mask, mask_values)
-            result.save(out_filename)
-
-        # Evaluate the predictions
-        image_prediction = np.array(Image.open(out_filename))
-        image_GT = np.array(Image.open(filenames_GT_masks[i]))
-        Accuracy, Precision, Recall, Dice , Area = stats(image_prediction, image_GT)
-        Accuracy_list.append(Accuracy)
-        Precision_list.append(Precision)
-        Recall_list.append(Recall) 
-        Dice_list.append(Dice)
-        Area_list.append(Area)
-        
-        if args.viz:
-            logging.info(f'Visualizing results for image {filename}, close to continue...')
-            plot_img_and_mask(img, mask)
+            if not args.no_save:
+                out_filename = os.path.join(args.output_dir,filename.split('/')[-1])
+                result = mask_to_image(mask, mask_values)
+                result.save(out_filename)
+    
+            # Evaluate the predictions
+            # image_prediction = np.array(Image.open(out_filename))
+            image_prediction = mask
+            image_GT = np.array(Image.open(filenames_GT_masks[i]))
+            Accuracy, Precision, Recall, Dice , Area = stats(image_prediction, image_GT)
+            Accuracy_list.append(Accuracy)
+            Precision_list.append(Precision)
+            Recall_list.append(Recall) 
+            Dice_list.append(Dice)
+            Area_list.append(Area)
+            
+            if args.viz:
+                logging.info(f'Visualizing results for image {filename}, close to continue...')
+                plot_img_and_mask(img, mask)
+    print(f"Predict time (seconds): {round(unet_predict_time.elapsed,2)}")
     
     print("Accuracy: {:.2f}% with range: {:.2f}% to {:.2f}%".format(np.median(Accuracy_list), np.min(Accuracy_list), np.max(Accuracy_list)))
     print("Precision: {:.2f}% with range: {:.2f}% to {:.2f}%".format(np.median(Precision_list), np.min(Precision_list), np.max(Precision_list)))
