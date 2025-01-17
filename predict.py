@@ -81,14 +81,16 @@ def stats(image_prediction, image_GT):
     Dice = 2*TP / (2*TP + FP + FN) 
     # Area
     Area = 100*np.sum(image_prediction == 1) / np.sum(image_GT == 1)
-    return Accuracy, Precision, Recall, Dice , Area
+    # Specificity 
+    Specificity = TN / (FP + TN) * 100 if (FP + TN) > 0 else 0 
+    return Accuracy, Precision, Recall, Dice, Area, Specificity
 
 def get_args():
     parser = argparse.ArgumentParser(description='Predict masks from input images')
-    parser.add_argument('--model', '-m', default='/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/tmp_data/tmp_UNET_model/w27g3dz2best_trainedUNet.pt', metavar='FILE',
+    parser.add_argument('--model', '-m', default='/output/thesis_output_ribbens/models/g2n87r3l_0.5scale_bestUNet.pt', metavar='FILE',
                         help='Specify the file in which the model is stored')
     parser.add_argument('--input', '-i', metavar='INPUT', nargs='+', help='Filenames of input images or directory', required=True)
-    parser.add_argument('--output_dir', '-o', metavar='OUTPUT', default = '/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/tmp_data/tmp_UNET_predictions' , help='Filenames of output images')
+    parser.add_argument('--output_dir', '-o', metavar='OUTPUT', default = '/data/TWO_23_019/TWO_23_019_tmp/blood_detection/tmp_data/tmp_UNET_predictions' , help='Filenames of output images')
     parser.add_argument('--viz', '-v', action='store_true',
                         help='Visualize the images as they are processed')
     parser.add_argument('--no-save', '-n', action='store_true', help='Do not save the output masks')
@@ -98,9 +100,12 @@ def get_args():
                         help='Scale factor for the input images')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
-    parser.add_argument('--dir_mask_GT', type=str, default='/data/TWO_23_019/TWO_23_019_tmp/Manual_labelling/UNET_fundo_only_dataset/labels/test', help='Path to dir of GT masks, only required when trying to eval Dice for blood detection')
+    parser.add_argument('--dir_mask_GT', type=str, default='/data/TWO_23_019/TWO_23_019_tmp/blood_detection/UNET_fundo_only_dataset/labels/test', help='Path to dir of GT masks, only required when trying to eval Dice for blood detection')
     
     return parser.parse_args()
+
+# example run:
+#      python3 predict.py --input='/data/TWO_23_019/TWO_23_019_tmp/blood_detection/UNET_fundo_only_dataset/images/test'  
 
 if __name__ == '__main__':
     args = get_args()
@@ -129,6 +134,7 @@ if __name__ == '__main__':
     Recall_list = []
     Dice_list = []
     Area_list = []
+    Specificity_list = []
     filenames_GT_masks = sorted(glob.glob(args.dir_mask_GT +'/*.png'))
     with Timer() as unet_predict_time:
         for i, filename in enumerate(in_files):       
@@ -149,20 +155,22 @@ if __name__ == '__main__':
             # image_prediction = np.array(Image.open(out_filename))
             image_prediction = mask
             image_GT = np.array(Image.open(filenames_GT_masks[i]))
-            Accuracy, Precision, Recall, Dice , Area = stats(image_prediction, image_GT)
+            Accuracy, Precision, Recall, Dice , Area, Specificity = stats(image_prediction, image_GT)
             Accuracy_list.append(Accuracy)
             Precision_list.append(Precision)
             Recall_list.append(Recall) 
             Dice_list.append(Dice)
             Area_list.append(Area)
+            Specificity_list.append(Specificity)
             
             if args.viz:
                 logging.info(f'Visualizing results for image {filename}, close to continue...')
                 plot_img_and_mask(img, mask)
     print(f"Predict time (seconds): {round(unet_predict_time.elapsed,2)}")
     
-    print("Accuracy: {:.2f}% with range: {:.2f}% to {:.2f}%".format(np.median(Accuracy_list), np.min(Accuracy_list), np.max(Accuracy_list)))
-    print("Precision: {:.2f}% with range: {:.2f}% to {:.2f}%".format(np.median(Precision_list), np.min(Precision_list), np.max(Precision_list)))
-    print("Sensitivity: {:.2f}% with range: {:.2f}% to {:.2f}%".format(np.median(Recall_list), np.min(Recall_list), np.max(Recall_list)))
-    print("Dice score: {:.3f} with range: {:.3f} to {:.3f}".format(np.median(Dice_list), np.min(Dice_list), np.max(Dice_list)))
-    print("Area is: {:.2f}% with range: {:.2f}% to {:.2f}%".format(np.median(Area_list), np.min(Area_list), np.max(Area_list)))
+    print("Accuracy: {:.1f}%, range: [{:.1f}-{:.1f}]".format(np.median(Accuracy_list), np.min(Accuracy_list), np.max(Accuracy_list)))
+    print("Precision: {:.1f}%, range: [{:.1f}-{:.1f}]".format(np.median(Precision_list), np.min(Precision_list), np.max(Precision_list)))
+    print("Sensitivity: {:.1f}%, range: [{:.1f}-{:.1f}]".format(np.median(Recall_list), np.min(Recall_list), np.max(Recall_list)))
+    print("Specificity: {:.1f}%, range: [{:.1f}-{:.1f}]".format(np.median(Specificity_list), np.min(Specificity_list), np.max(Specificity_list)))
+    print("Dice score: {:.3f}, range: ]{:.3f}-{:.3f}]".format(np.median(Dice_list), np.min(Dice_list), np.max(Dice_list)))
+    print("Area is: {:.0f}%, range: [{:.0f}-{:.0f}]".format(np.median(Area_list), np.min(Area_list), np.max(Area_list)))
